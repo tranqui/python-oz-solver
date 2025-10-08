@@ -632,8 +632,8 @@ class OrnsteinZernikeSolver(ABC):
         assert self.converged
         f = self.potential.force(self.r)
         f[f > 1e4] = 0.
-        I = simpson(self.r**3*self.g*f, self.r)
-        return self.rho + 2/3 * np.pi * self.rho**2 / self.T * I
+        I = np.sum(np.outer(self.rho, self.rho) * simpson(self.r**3*self.g*f, self.r))
+        return np.sum(self.rho) + 2/3 * np.pi / self.T * I
 
     @property
     def excess_chemical_potential(self):
@@ -646,6 +646,18 @@ class PercusYevickSolver(OrnsteinZernikeSolver):
         with np.errstate(invalid='ignore'):
             return np.log(1 + e) - e
 
+    @property
+    def excess_chemical_potential(self):
+        r"""Test particle route for $\beta \mu^\mathrm{ex}$.
+
+        If we view the PY closure as the leading terms in the Taylor expansion
+        of the HNC closure, then we can use the HNC expression for the
+        chemical potential.
+        """
+        assert self.converged
+        I = simpson(self.r**2*(self.h*self.e/2 - self.c), self.r)
+        try: return 4*np.pi / self.T * I @ np.atleast_1d(self.rho)
+        except: return 4*np.pi / self.T * I * self.rho
 
 class HypernettedChainSolver(OrnsteinZernikeSolver):
     def bridge_closure(self, e: NDArray, *args, **kwargs):
@@ -654,10 +666,11 @@ class HypernettedChainSolver(OrnsteinZernikeSolver):
 
     @property
     def excess_chemical_potential(self):
-        r"""Chemical potential/test particle route for $\beta \mu^\mathrm{ex}$."""
+        r"""Test particle route for $\beta \mu^\mathrm{ex}$."""
         assert self.converged
         I = simpson(self.r**2*(self.h*self.e/2 - self.c), self.r)
-        return 4*np.pi * self.rho / self.T * I
+        try: return 4*np.pi / self.T * I @ np.atleast_1d(self.rho)
+        except: return 4*np.pi / self.T * I * self.rho
 
     @property
     def excess_free_energy_density(self):
