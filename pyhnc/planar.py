@@ -91,7 +91,7 @@ class PlanarGrid:
         self.fftw_b = pyfftw.FFTW(self.b_padded, self.fft_b_out,
                                  direction='FFTW_FORWARD', flags=flags)
         self.ifftw = pyfftw.FFTW(self.fft_a_out, self.ifft_out,
-                                direction='FFTW_BACKWARD', flags=flags)
+                                 direction='FFTW_BACKWARD', flags=flags)
 
         # Indices for 'same' slicing in convolution
         self.start = (self.full_size - self.N) // 2

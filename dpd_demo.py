@@ -151,8 +151,8 @@ if args.sunlight:
     
     from oz import wizard as w
 
-    w.ng = grid.ng
-    w.deltar = grid.deltar
+    w.ng = grid.N
+    w.deltar = grid.dr
 
     w.initialise()
     w.arep[0,0] = A

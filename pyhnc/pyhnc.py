@@ -39,7 +39,7 @@ from typing import Type
 from numpy.typing import NDArray
 
 # Provide a grid as a working platform.  This is the pair of arrays
-# r(:) and q(:) initialised to match the desired ng (# grid points)
+# r(:) and q(:) initialised to match the desired N (# grid points)
 # and Δr.  Note that the array lengths are actually ng-1.  A real odd
 # discrete Fourier transform (RODFT00) is also initialised, with
 # functions to do forward and backward Fourier-Bessel transforms
@@ -50,28 +50,48 @@ from numpy.typing import NDArray
 
 class RadialGrid:
 
-    def __init__(self, ng=8192, deltar=0.02):
+    def __init__(self, L: float, N=2**13):
         """Initialise grids with the desired size and spacing"""
-        self.ng = ng
-        self.deltar = deltar
-        self.deltaq = np.pi / (self.deltar*self.ng) # as above
-        self.r = self.deltar * np.arange(1, self.ng) # start from 1, and of length ng-1
-        self.q = self.deltaq * np.arange(1, self.ng) # ditto
-        self.fftwx = pyfftw.empty_aligned(self.ng-1)
-        self.fftwy = pyfftw.empty_aligned(self.ng-1)
+
+        self.a = 0
+        self.b = L
+        self.L = L
+        self.N = N
+
+        self.dr = self.L / self.N
+        self.dq = np.pi / self.L
+
+        self.r = self.dr * np.arange(1, self.N)
+        self.q = self.dq * np.arange(1, self.N)
+
+        self.fftwx = pyfftw.empty_aligned(self.N-1)
+        self.fftwy = pyfftw.empty_aligned(self.N-1)
         self.fftw = pyfftw.FFTW(self.fftwx, self.fftwy,
                                 direction='FFTW_RODFT00',
                                 flags=('FFTW_ESTIMATE',))
-        self.parstrings = [f'ng = {self.ng} = 2^{round(np.log2(ng))}',
-                           f'Δr = {self.deltar}', f'Δq = {self.deltaq:0.3g}',
-                           f'|FFTW arrays| = {self.ng-1}']
 
     @property
     def name(self):
         return type(self).__name__
 
+    @property
+    def size(self):
+        return self.N - 1
+
     def __repr__(self):
-        return f'{self.name}: ' + ', '.join(self.parstrings)
+        return f'{self.name}: ' \
+               f'N = {self.N} = 2^{round(np.log2(self.N))}, ' \
+               f'Δr = {self.dr}, ' \
+               f'Δq = {self.dq:0.3g}' \
+               f'|FFTW arrays| = {self.N-1}'
+
+    def integrate(self, fr):
+
+        zeros = np.zeros(fr.shape[:-1] + (1,))
+        fpad = np.concatenate([zeros, fr, zeros], axis=-1)
+        assert np.allclose(fpad[..., 0], 0)
+        assert np.allclose(fpad[..., -1], 0)
+        return simpson(fpad, dx=self.dr)
 
     # These functions assume the FFTW has been initialised as above, the
     # arrays r and q exist, as do the parameters Δr and Δq.
@@ -82,7 +102,7 @@ class RadialGrid:
         for idx in np.ndindex(fr.shape[:-1]):
             self.fftwx[:] = self.r * fr[idx]
             self.fftw.execute()
-            out[idx] = 2*np.pi*self.deltar/self.q * self.fftwy
+            out[idx] = 2*np.pi*self.dr/self.q * self.fftwy
         return out
 
     def fourier_bessel_backward(self, fq):
@@ -91,14 +111,15 @@ class RadialGrid:
         for idx in np.ndindex(fq.shape[:-1]):
             self.fftwx[:] = self.q * fq[idx]
             self.fftw.execute()
-            out[idx] = self.deltaq/(4*np.pi**2*self.r) * self.fftwy
+            out[idx] = self.dq/(4*np.pi**2*self.r) * self.fftwy
         return out
+
 
 
 import pytest
 @pytest.mark.parametrize("alpha", [1, 0.1])
-def test_radial_grid(alpha, N=2**13, Δr=0.02):
-    grid = Grid(N, Δr)
+def test_radial_grid(alpha, L=200, N=2**13):
+    grid = Grid(L, N)
     r, q = grid.r, grid.q
 
     # Verify against analytically calculatable function.
@@ -207,7 +228,11 @@ class OrnsteinZernikeSolver(ABC):
 
     @property
     def dr(self):
-        return self.grid.deltar
+        return self.grid.dr
+
+    @property
+    def L(self):
+        return self.grid.L
 
     @property
     def density(self):
@@ -353,7 +378,7 @@ class OrnsteinZernikeSolver(ABC):
         """
         out = np.empty(u.shape[:-1])
         for idx in np.ndindex(out.shape):
-            out[idx] = simpson(u[idx]*v[idx], dx=self.dr)
+            out[idx] = self.grid.integrate(u[idx]*v[idx])
         return np.sum(out)
 
     def magnitude(self, u: NDArray):
@@ -515,7 +540,7 @@ class OrnsteinZernikeSolver(ABC):
                     if prev_nspecies != n: restart = True
 
             if restart:
-                h = np.squeeze(np.zeros((n, n, self.r.size)))
+                h = np.squeeze(np.zeros((n, n, self.grid.size)))
                 e = self.oz_solution_e_from_h(h, rho, cq_long=cq_long)
             else:
                 h = self.h.copy()
@@ -531,7 +556,7 @@ class OrnsteinZernikeSolver(ABC):
             iteration = self.h_iteration
 
         if np.any(np.isnan(input)): raise ValueError
-        assert input.size == potential.nspecies**2 * self.r.size
+        assert input.size == potential.nspecies**2 * self.grid.size
 
         # Memory of iterations for inferring hessian
         f = deque(maxlen=self.history_size) # input value in each step
@@ -632,7 +657,7 @@ class OrnsteinZernikeSolver(ABC):
         assert self.converged
         f = self.potential.force(self.r)
         f[f > 1e4] = 0.
-        I = np.sum(np.outer(self.rho, self.rho) * simpson(self.r**3*self.g*f, self.r))
+        I = np.sum(np.outer(self.rho, self.rho) * self.grid.integrate(self.r**3*self.g*f))
         return np.sum(self.rho) + 2/3 * np.pi / self.T * I
 
     @property
@@ -655,7 +680,7 @@ class PercusYevickSolver(OrnsteinZernikeSolver):
         chemical potential.
         """
         assert self.converged
-        I = simpson(self.r**2*(self.h*self.e/2 - self.c), self.r)
+        I = self.grid.integrate(self.r**2*(self.h*self.e/2 - self.c))
         try: return 4*np.pi / self.T * I @ np.atleast_1d(self.rho)
         except: return 4*np.pi / self.T * I * self.rho
 
@@ -668,7 +693,7 @@ class HypernettedChainSolver(OrnsteinZernikeSolver):
     def excess_chemical_potential(self):
         r"""Test particle route for $\beta \mu^\mathrm{ex}$."""
         assert self.converged
-        I = simpson(self.r**2*(self.h*self.e/2 - self.c), self.r)
+        I = self.grid.integrate(self.r**2*(self.h*self.e/2 - self.c))
         try: return 4*np.pi / self.T * I @ np.atleast_1d(self.rho)
         except: return 4*np.pi / self.T * I * self.rho
 
@@ -682,8 +707,8 @@ class HypernettedChainSolver(OrnsteinZernikeSolver):
 Solver = HypernettedChainSolver
 
 @pytest.mark.parametrize('m', [2, 3])
-def test_mixture_hq_from_cq(m, N=2**13, Δr=0.02):
-    grid = Grid(N, Δr)
+def test_mixture_hq_from_cq(m, L=250, N=2**13):
+    grid = Grid(L, N)
     solver = Solver(grid)
 
     C = np.random.random((m, m, N))
@@ -700,8 +725,8 @@ def test_mixture_hq_from_cq(m, N=2**13, Δr=0.02):
     assert np.allclose(H, expected)
 
 @pytest.mark.parametrize('m', [2, 3])
-def test_mixture_eq_from_cq(m, N=2**13, Δr=0.02):
-    grid = Grid(N, Δr)
+def test_mixture_eq_from_cq(m, L=250, N=2**13):
+    grid = Grid(L, N)
     solver = Solver(grid)
 
     C = np.random.random((m, m, N))
@@ -718,8 +743,8 @@ def test_mixture_eq_from_cq(m, N=2**13, Δr=0.02):
     assert np.allclose(E, expected)
 
 @pytest.mark.parametrize('m', [2, 3])
-def test_mixture_cq_from_hq(m, N=2**13, Δr=0.02):
-    grid = Grid(N, Δr)
+def test_mixture_cq_from_hq(m, L=250, N=2**13):
+    grid = Grid(L, N)
     solver = Solver(grid)
 
     H = np.random.random((m, m, N))
@@ -737,8 +762,8 @@ def test_mixture_cq_from_hq(m, N=2**13, Δr=0.02):
     assert np.allclose(C, expected)
 
 @pytest.mark.parametrize('m', [2, 3])
-def test_mixture_eq_from_hq(m, N=2**13, Δr=0.02):
-    grid = Grid(N, Δr)
+def test_mixture_eq_from_hq(m, L=250, N=2**13):
+    grid = Grid(L, N)
     solver = Solver(grid)
 
     H = np.random.random((m, m, N))
@@ -756,10 +781,10 @@ def test_mixture_eq_from_hq(m, N=2**13, Δr=0.02):
     assert np.allclose(E, expected)
 
 @pytest.mark.parametrize('m', [2, 3])
-def test_identical_mixtures(m, A0=25, ρ=3.0, N=2**13, Δr=0.02):
+def test_identical_mixtures(m, A0=25, ρ=3.0, L=250, N=2**13):
     """Test OZ solver for mixtures is consistent with single-component case."""
 
-    grid = Grid(N, Δr)
+    grid = Grid(L, N)
     solvent = Solver(grid)
 
     φ = potentials.DPD(A0)
@@ -774,11 +799,11 @@ def test_identical_mixtures(m, A0=25, ρ=3.0, N=2**13, Δr=0.02):
     for idx in np.ndindex(sol2.h.shape[:-1]):
         assert np.allclose(sol2.h[idx], sol1.h)
 
-def test_ng_splitting(N=2**13, Δr=0.02):
+def test_ng_splitting(L=250, N=2**13):
     """Test Ng splitting with a simple potential where the Fourier
     transform is trivial (the Gaussian)."""
 
-    grid = Grid(N, Δr)
+    grid = Grid(L, N)
     solver = Solver(grid)
 
     rho = 1
