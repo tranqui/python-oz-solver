@@ -518,6 +518,40 @@ def test_gaussian():
     exact = np.array([-approx_fprime(rr, v.potential) for rr in r]).reshape(-1)
     assert np.allclose(v.force(r), exact, rtol=1e-6)
 
+class DPDGaussianIon(Potential):
+    r"""DPD bead with an additional Gaussian-distributed soft electrostatic
+    potential. Cf. documentation for `DPD` and `GaussianIon` for details on
+    these components.
+    """
+
+    def __getstate__(self):
+        return {'dpd': self.dpd.copy(),
+                'ion': self.ion.copy()}
+
+    def __repr__(self):
+        return rf'<DPDGaussianIon dpd={self.dpd} ion={self.ion}>'
+
+    def __init__(self, A: float | NDArray,
+                 z: float | NDArray, α: float,
+                 rcut: float | NDArray=1.,
+                 lB: float=1.):
+
+        self.dpd = DPD(A, rcut)
+        self.ion = GaussianIon(z, α, lB)
+        assert self.dpd.nspecies == self.ion.nspecies
+        self.long = self.ion.long
+        self.short = ShortRangeResidual(self, self.long)
+
+    @property
+    def nspecies(self):
+        assert self.dpd.nspecies == self.ion.nspecies
+        return self.dpd.nspecies
+
+    def potential(self, r: float | NDArray):
+        return self.dpd.potential(r) + self.ion.potential(r)
+
+    def force(self, r: float | NDArray):
+        return self.dpd.force(r) + self.ion.force(r)
 
 
 if __name__ == '__main__':
