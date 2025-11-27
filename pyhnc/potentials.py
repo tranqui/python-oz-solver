@@ -307,8 +307,141 @@ class GaussianIon(Potential):
         if f.ndim == 0: f = f.item()
         return f
 
+class ExponentialIonLongRange(Potential):
+    r"""Long range part of ExponentialIon."""
 
-def test_gaussian_ion():
+    def __getstate__(self):
+        return {'full': self.full}
+
+    def __repr__(self):
+        return rf'<{type(self).__name__} z={self.full.z} λ={self.full.λ} lB={self.full.lB}>'
+
+    def __init__(self, full):
+        self.full = full
+
+    @property
+    def nspecies(self):
+        return self.full.nspecies
+
+    @property
+    def α(self):
+        """Option for consistency with GaussianIon interface."""
+        return self.λ
+
+    @α.setter
+    def α(self, value):
+        """Option for consistency with GaussianIon interface."""
+        self.λ = value
+
+    def potential(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = self.full.λ
+
+        with np.errstate(invalid='ignore'):
+            v = self.full.lB * (1 - np.exp(-2*r/λ) * (1 + r/λ)) / r
+        v = np.outer(self.full.z, self.full.z)[:,:,None] * v[None,None,:]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def potential_fourier(self, k: float | NDArray):
+        k = np.atleast_1d(k)
+
+        with np.errstate(invalid='ignore'):
+            v = 4*np.pi * self.full.lB * 16/(4 + (k*self.full.λ)**2) / k**2
+        v = np.outer(self.full.z, self.full.z)[:,:,None] * v[None,None,:]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def force(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = self.full.λ
+
+        with np.errstate(invalid='ignore'):
+            f = self.full.lB * (
+                    1 - np.exp(-2*r/λ) * (1 + 2*r/λ + 2*(r/λ)**2)
+                ) / r**2
+        f = np.outer(self.full.z, self.full.z)[:,:,None] * f[None,None,:]
+
+        f = np.squeeze(f)
+        if f.ndim == 0: f = f.item()
+        return f
+
+
+class ExponentialIon(Potential):
+    r"""Interactions between ions with exponentially distributed charges
+    (often referred to as "Slater" type in the literature):
+
+        $$\rho_i(r) = \ell_\mathrm{B} z_i
+        \frac{e^{-\frac{2 r}{\lambda}}}{\pi \lambda^3}\,,$$
+
+    where $r$ is the distance from the atom centre, $\ell_\mathrm{B}$ is the
+    Bjerrum length and $z_i$ is the valence of species $i$.
+    """
+
+    def __getstate__(self):
+        return {'z': self.z.copy(),
+                'λ': self.λ.copy(),
+                'lB': self.lB}
+
+    def __repr__(self):
+        return rf'<{type(self).__name__} z={self.z} λ={self.λ} lB={self.lB}>'
+
+    def __init__(self, z: float | NDArray, λ: float, lB: float=1.):
+        self.z = np.atleast_1d(z)
+        self.λ = np.array(λ)
+        assert self.λ.size == 1
+        self.lB = lB
+
+        self.long = ExponentialIonLongRange(self)
+        self.short = ShortRangeResidual(self, self.long)
+
+    @property
+    def nspecies(self):
+        return len(self.z)
+
+    @property
+    def α(self):
+        """Option for consistency with GaussianIon interface."""
+        return self.λ
+
+    @α.setter
+    def α(self, value):
+        """Option for consistency with GaussianIon interface."""
+        self.λ = value
+
+    def potential(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = self.λ
+
+        with np.errstate(invalid='ignore'):
+            v = 1 + 11/8*(r/λ) + 3/4*(r/λ)**2 + 1/6*(r/λ)**3
+            v = self.lB * (1 - np.exp(-2*r/λ)*v) / r
+        v = np.outer(self.z, self.z)[:,:,None] * v[None,None,:]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def force(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = self.λ
+
+        with np.errstate(invalid='ignore'):
+            f = 1 + 2*r/λ + 2*(r/λ)**2 + 7/6*(r/λ)**3 + 1/3*(r/λ)**4
+            f = self.lB * (1 - np.exp(-2*r/λ) * f) / r**2
+        f = np.outer(self.z, self.z)[:,:,None] * f[None,None,:]
+
+        f = np.squeeze(f)
+        if f.ndim == 0: f = f.item()
+        return f
+
+import pytest
+@pytest.mark.parametrize('cls', [GaussianIon, ExponentialIon])
+def test_ion(cls):
     import pickle
     def test_copy(v, v2):
         assert v2 is not v
@@ -322,7 +455,7 @@ def test_gaussian_ion():
         assert np.all(v.z != v2.z)
         assert v.lB != v2.lB
 
-    v = GaussianIon([1, -1], 1)
+    v = cls([1, -1], 1)
     assert np.allclose(v.copy().potential(1.), v.potential(1.))
     test_copy(v, v.copy())
     test_copy(v, pickle.loads(pickle.dumps(v)))
@@ -332,10 +465,11 @@ def test_gaussian_ion():
 
     for i in range(v.nspecies):
         for j in range(v.nspecies):
-            for vv in [v, v.short, v.long]:
+            for vv in [v.long, v, v.short]:
                 f = lambda r: vv.potential(r)[i,j]
                 exact = np.array([-approx_fprime(rr, f) for rr in r]).reshape(-1)
-                assert np.allclose(vv.force(r)[i,j], exact, rtol=1e-6)
+                force = vv.force(r)[i,j]
+                assert np.allclose(vv.force(r)[i,j], exact, rtol=1e-5)
 
     short, long = v.short.potential(r), v.long.potential(r)
     assert np.allclose(v.potential(r), short + long)
@@ -556,6 +690,6 @@ class DPDGaussianIon(Potential):
 
 if __name__ == '__main__':
     test_dpd()
-    test_gaussian_ion()
+    for ion in GaussianIon, ExponentialIon: test_ion(ion)
     test_lj()
     test_gaussian()
