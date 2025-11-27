@@ -920,6 +920,9 @@ class SoluteSolver(Solver):
 class TestParticleRPA(Solver):
     """Subclass for mean-field DFT approach."""
 
+    # Tell pytest to ignore the "Test" prefix in this name.
+    __test__ = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
