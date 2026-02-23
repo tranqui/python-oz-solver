@@ -45,6 +45,14 @@ class Potential(ABC):
         for key, value in state.items():
             setattr(self, key, value)
 
+    @abstractmethod
+    def __eq__(self, other):
+        raise NotImplementedError
+
+    def subset(self, species: NDArray | list):
+        """Construct potential on just subset of species"""
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def nspecies(self):
@@ -74,26 +82,29 @@ class ShortRangeResidual(Potential):
     """
 
     def __getstate__(self):
-        return {'full': self.full, 'long': self.long}
+        return {'full': self.full}
 
     def __repr__(self):
-        return rf'<{type(self).__name__} full={self.full} long={self.long}>'
+        return rf'<{type(self).__name__} full={self.full} long={self.full.long}>'
 
-    def __init__(self, full, long):
+    def __init__(self, full):
         self.full = full
-        self.long = long
-        assert self.full.nspecies == self.long.nspecies
+        assert self.full.nspecies == self.full.long.nspecies
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.full == other.full
 
     @property
     def nspecies(self):
-        assert self.full.nspecies == self.long.nspecies
+        assert self.full.nspecies == self.full.long.nspecies
         return self.full.nspecies
 
     def potential(self, r: float | NDArray):
-        return self.full.potential(r) - self.long.potential(r)
+        return self.full.potential(r) - self.full.long.potential(r)
 
     def force(self, r: float | NDArray):
-        return self.full.force(r) - self.long.force(r)
+        return self.full.force(r) - self.full.long.force(r)
 
 
 class DPD(Potential):
@@ -127,9 +138,20 @@ class DPD(Potential):
         self.A = A
         self.rcut = rcut
 
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.allclose(self.A, other.A) and \
+               np.allclose(self.rcut, other.rcut)
+
     @property
     def nspecies(self):
         return len(self.A)
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        indices = np.ix_(species, species)
+        return DPD(self.A[self.indices], self.rcut[indices])
 
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
@@ -158,10 +180,12 @@ def test_dpd():
     import pickle
     def test_copy(v, v2):
         assert v2 is not v
+        assert v == v2
         assert np.all(v.A == v2.A)
         assert np.all(v.rcut == v2.rcut)
         v2.A += 1
         v2.rcut += 1
+        assert v != v2
         assert np.all(v.A != v2.A)
         assert np.all(v.rcut != v2.rcut)
 
@@ -209,9 +233,16 @@ class GaussianIonLongRange(Potential):
     def __init__(self, full):
         self.full = full
 
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.full == other.full
+
     @property
     def nspecies(self):
         return self.full.nspecies
+
+    def subset(self, species: list | NDArray):
+        raise RuntimeError('should never be called!')
 
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
@@ -263,7 +294,9 @@ class GaussianIon(Potential):
     def __getstate__(self):
         return {'z': self.z.copy(),
                 'α': self.α.copy(),
-                'lB': self.lB}
+                'lB': self.lB,
+                'long': self.long,
+                'short': self.short}
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.z} α={self.α} lB={self.lB}>'
@@ -275,11 +308,21 @@ class GaussianIon(Potential):
         self.lB = lB
 
         self.long = GaussianIonLongRange(self)
-        self.short = ShortRangeResidual(self, self.long)
+        self.short = ShortRangeResidual(self)
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.allclose(self.z, other.z) and \
+               np.all(self.α == other.α) and self.lB == other.lB
 
     @property
     def nspecies(self):
         return len(self.z)
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        return GaussianIon(self.z[species], self.α, self.lB)
 
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
@@ -318,6 +361,10 @@ class ExponentialIonLongRange(Potential):
 
     def __init__(self, full):
         self.full = full
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.full == other.full
 
     @property
     def nspecies(self):
@@ -385,7 +432,9 @@ class ExponentialIon(Potential):
     def __getstate__(self):
         return {'z': self.z.copy(),
                 'λ': self.λ.copy(),
-                'lB': self.lB}
+                'lB': self.lB,
+                'long': self.long,
+                'short': self.short}
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.z} λ={self.λ} lB={self.lB}>'
@@ -397,11 +446,22 @@ class ExponentialIon(Potential):
         self.lB = lB
 
         self.long = ExponentialIonLongRange(self)
-        self.short = ShortRangeResidual(self, self.long)
+        self.short = ShortRangeResidual(self)
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.all(self.z == other.z) and \
+               np.all(self.λ == other.λ) and \
+               self.lB == other.lB
 
     @property
     def nspecies(self):
         return len(self.z)
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        return ExponentialIon(self.z[species], self.λ, self.lB)
 
     @property
     def α(self):
@@ -445,12 +505,14 @@ def test_ion(cls):
     import pickle
     def test_copy(v, v2):
         assert v2 is not v
+        assert v2 == v
         assert np.all(v.α == v2.α)
         assert np.all(v.z == v2.z)
         assert v.lB == v2.lB
         v2.α += 1
         v2.z *= 2
         v2.lB += 1
+        assert v2 != v
         assert np.all(v.α != v2.α)
         assert np.all(v.z != v2.z)
         assert v.lB != v2.lB
@@ -505,9 +567,23 @@ class LennardJones(Potential):
     def __call__(self, *args, **kwargs):
         return self.potential(*args, **kwargs)
 
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.all(self.sigma == other.sigma) and \
+               np.all(self.epsilon == other.epsilon) and \
+               np.all(self.rcut == other.rcut) and \
+               self.vshift == other.vshift
+
     @property
     def nspecies(self):
         return 1
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        indices = np.ix_(species, species)
+        return LennardJones(self.sigma[indices], self.epsilon[indices],
+                            self.rcut[indices])
 
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
@@ -537,12 +613,14 @@ def test_lj():
     import pickle
     def test_copy(v, v2):
         assert v2 is not v
+        assert v == v2
         assert np.all(v.sigma == v2.sigma)
         assert np.all(v.epsilon == v2.epsilon)
         assert np.all(v.rcut == v2.rcut)
         v2.sigma += 1
         v2.epsilon += 1
         v2.rcut += 1
+        assert v != v2
         assert np.all(v.sigma != v2.sigma)
         assert np.all(v.epsilon != v2.epsilon)
         assert np.all(v.rcut != v2.rcut)
@@ -584,9 +662,19 @@ class Gaussian(Potential):
         assert alpha.shape[0] == alpha.shape[1]
         self.alpha = alpha
 
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.all(self.alpha == other.alpha)
+
     @property
     def nspecies(self):
         return len(self.alpha)
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        indices = np.ix_(species, species)
+        return Gaussian(self.alpha[indices])
 
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
@@ -626,15 +714,17 @@ class GaussianSplit(Gaussian):
     def __init__(self, alpha: float | NDArray=1.):
         super().__init__(alpha)
         self.long = Gaussian(alpha)
-        self.short = ShortRangeResidual(self, self.long)
+        self.short = ShortRangeResidual(self)
 
 
 def test_gaussian():
     import pickle
     def test_copy(v, v2):
         assert v2 is not v
+        assert v2 == v
         assert np.all(v.alpha == v2.alpha)
         v2.alpha += 1
+        assert v2 != v
         assert np.all(v.alpha != v2.alpha)
 
     r = np.linspace(1, 10, 100)
@@ -660,7 +750,9 @@ class DPDGaussianIon(Potential):
 
     def __getstate__(self):
         return {'dpd': self.dpd.copy(),
-                'ion': self.ion.copy()}
+                'ion': self.ion.copy(),
+                'long': self.long,
+                'short': self.short}
 
     def __repr__(self):
         return rf'<DPDGaussianIon dpd={self.dpd} ion={self.ion}>'
@@ -674,12 +766,78 @@ class DPDGaussianIon(Potential):
         self.ion = GaussianIon(z, α, lB)
         assert self.dpd.nspecies == self.ion.nspecies
         self.long = self.ion.long
-        self.short = ShortRangeResidual(self, self.long)
+        self.short = ShortRangeResidual(self)
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.dpd == other.dpd and self.ion == ion
 
     @property
     def nspecies(self):
         assert self.dpd.nspecies == self.ion.nspecies
         return self.dpd.nspecies
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        indices = np.ix_(species, species)
+        return DPDGaussianIon(self.dpd.A[indices],
+                              self.ion.z[species],
+                              self.ion.α,
+                              self.dpd.rcut[indices],
+                              self.ion.lB)
+
+    def potential(self, r: float | NDArray):
+        return self.dpd.potential(r) + self.ion.potential(r)
+
+    def force(self, r: float | NDArray):
+        return self.dpd.force(r) + self.ion.force(r)
+
+
+class DPDExponentialIon(Potential):
+    r"""DPD bead with an additional Exponential-distributed soft electrostatic
+    potential. Cf. documentation for `DPD` and `ExponentialIon` for details on
+    these components.
+    """
+
+    def __getstate__(self):
+        return {'dpd': self.dpd.copy(),
+                'ion': self.ion.copy(),
+                'long': self.long,
+                'short': self.short}
+
+    def __repr__(self):
+        return rf'<DPDExponentialIon dpd={self.dpd} ion={self.ion}>'
+
+    def __init__(self, A: float | NDArray,
+                 z: float | NDArray, λ: float,
+                 rcut: float | NDArray=1.,
+                 lB: float=1.):
+
+        self.dpd = DPD(A, rcut)
+        self.ion = ExponentialIon(z, λ, lB)
+        assert self.dpd.nspecies == self.ion.nspecies
+        self.long = self.ion.long
+        self.short = ShortRangeResidual(self)
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.dpd == other.dpd and self.ion == ion
+
+    @property
+    def nspecies(self):
+        assert self.dpd.nspecies == self.ion.nspecies
+        return self.dpd.nspecies
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        indices = np.ix_(species, species)
+        return DPDExponentialIon(self.dpd.A[indices],
+                                 self.ion.z[species],
+                                 self.ion.λ,
+                                 self.dpd.rcut[indices],
+                                 self.ion.lB)
 
     def potential(self, r: float | NDArray):
         return self.dpd.potential(r) + self.ion.potential(r)
