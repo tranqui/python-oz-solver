@@ -770,7 +770,7 @@ class DPDGaussianIon(Potential):
 
     def __eq__(self, other):
         if type(other) is not type(self): return False
-        return self.dpd == other.dpd and self.ion == ion
+        return self.dpd == other.dpd and self.ion == other.ion
 
     @property
     def nspecies(self):
@@ -822,7 +822,7 @@ class DPDExponentialIon(Potential):
 
     def __eq__(self, other):
         if type(other) is not type(self): return False
-        return self.dpd == other.dpd and self.ion == ion
+        return self.dpd == other.dpd and self.ion == other.ion
 
     @property
     def nspecies(self):
