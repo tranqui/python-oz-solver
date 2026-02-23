@@ -33,17 +33,25 @@ class Potential(ABC):
 
     def copy(self):
         cls = self.__class__
-        new = cls.__new__(cls)
+        new = cls(*self.__getinitargs__())
         new.__setstate__(self.__getstate__())
         return new
 
-    @abstractmethod
+    def __getinitargs__(self):
+        return
+
+    def __reduce_ex__(self, protocol):
+        return (
+            self.__class__,
+            self.__getinitargs__(),
+            self.__getstate__(),
+        )
+
     def __getstate__(self):
-        raise NotImplementedError
+        return {}
 
     def __setstate__(self, state):
-        for key, value in state.items():
-            setattr(self, key, value)
+        self.__dict__.update(state)
 
     @abstractmethod
     def __eq__(self, other):
@@ -81,9 +89,6 @@ class ShortRangeResidual(Potential):
     long-range part that $v(r)$ approaches at large $r$.
     """
 
-    def __getstate__(self):
-        return {'full': self.full}
-
     def __repr__(self):
         return rf'<{type(self).__name__} full={self.full} long={self.full.long}>'
 
@@ -118,9 +123,8 @@ class DPD(Potential):
     suitable for large time-steps.
     """
 
-    def __getstate__(self):
-        return {'A': self.A.copy(),
-                'rcut': self.rcut.copy()}
+    def __getinitargs__(self):
+        return self.A.copy(), self.rcut.copy()
 
     def __repr__(self):
         return rf'<{type(self).__name__} A={self.A.tolist()} rc={self.rcut.tolist()}>'
@@ -224,9 +228,6 @@ def test_dpd():
 class GaussianIonLongRange(Potential):
     r"""Long range part of GaussianIon."""
 
-    def __getstate__(self):
-        return {'full': self.full}
-
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.full.z} α={self.full.α} lB={self.full.lB}>'
 
@@ -291,12 +292,8 @@ class GaussianIon(Potential):
     Bjerrum length and $z_i$ is the valence of species $i$.
     """
 
-    def __getstate__(self):
-        return {'z': self.z.copy(),
-                'α': self.α.copy(),
-                'lB': self.lB,
-                'long': self.long,
-                'short': self.short}
+    def __getinitargs__(self):
+        return self.z.copy(), self.α.copy(), self.lB
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.z} α={self.α} lB={self.lB}>'
@@ -352,9 +349,6 @@ class GaussianIon(Potential):
 
 class ExponentialIonLongRange(Potential):
     r"""Long range part of ExponentialIon."""
-
-    def __getstate__(self):
-        return {'full': self.full}
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.full.z} λ={self.full.λ} lB={self.full.lB}>'
@@ -429,12 +423,8 @@ class ExponentialIon(Potential):
     Bjerrum length and $z_i$ is the valence of species $i$.
     """
 
-    def __getstate__(self):
-        return {'z': self.z.copy(),
-                'λ': self.λ.copy(),
-                'lB': self.lB,
-                'long': self.long,
-                'short': self.short}
+    def __getinitargs__(self):
+        return self.z.copy(), self.λ.copy(), self.lB
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.z} λ={self.λ} lB={self.lB}>'
@@ -547,11 +537,8 @@ class LennardJones(Potential):
         $$v_\text{truncate}(r) = v(r) - v(rcut)\,.$$
     """
 
-    def __getstate__(self):
-        return {'sigma': self.sigma,
-                'epsilon': self.epsilon,
-                'rcut': self.rcut,
-                'vshift': self.vshift}
+    def __getinitargs__(self):
+        return self.sigma, self.epsilon, self.rcut
 
     def __init__(self, sigma: float = 1.,
                  epsilon: float = 1.,
@@ -651,8 +638,8 @@ class Gaussian(Potential):
     r"""A simple Gaussian potential. This is primarily used to test Ng
     splitting (cf. `GaussianSplit` and `pyhnc.OrnsteinZernikeSolver`)."""
 
-    def __getstate__(self):
-        return {'alpha': self.alpha.copy()}
+    def __getinitargs__(self):
+        return (self.alpha.copy(),)
 
     def __repr__(self):
         return rf'<Gaussian α={self.alpha.tolist()}>'
@@ -748,11 +735,9 @@ class DPDGaussianIon(Potential):
     these components.
     """
 
-    def __getstate__(self):
-        return {'dpd': self.dpd.copy(),
-                'ion': self.ion.copy(),
-                'long': self.long,
-                'short': self.short}
+    def __getinitargs__(self):
+        return self.dpd.A.copy(), self.ion.z.copy(), \
+               self.ion.α.copy(), self.dpd.rcut.copy(), self.ion.lB
 
     def __repr__(self):
         return rf'<DPDGaussianIon dpd={self.dpd} ion={self.ion}>'
@@ -800,11 +785,9 @@ class DPDExponentialIon(Potential):
     these components.
     """
 
-    def __getstate__(self):
-        return {'dpd': self.dpd.copy(),
-                'ion': self.ion.copy(),
-                'long': self.long,
-                'short': self.short}
+    def __getinitargs__(self):
+        return self.dpd.A.copy(), self.ion.z.copy(), \
+               self.ion.λ.copy(), self.dpd.rcut.copy(), self.ion.lB
 
     def __repr__(self):
         return rf'<DPDExponentialIon dpd={self.dpd} ion={self.ion}>'
