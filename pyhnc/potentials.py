@@ -390,7 +390,7 @@ class ExponentialIonLongRange(Potential):
         k = np.atleast_1d(k)
 
         with np.errstate(invalid='ignore'):
-            v = 4*np.pi * self.full.lB * 16/(4 + (k*self.full.λ)**2) / k**2
+            v = 64*np.pi * self.full.lB / (4 + (k*self.full.λ)**2)**2 / k**2
         v = np.outer(self.full.z, self.full.z)[:,:,None] * v[None,None,:]
 
         v = np.squeeze(v)
