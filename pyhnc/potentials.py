@@ -160,9 +160,11 @@ class DPD(Potential):
     def potential(self, r: float | NDArray):
         r = np.atleast_1d(r)
 
-        v = 0.5 * self.A[:,:,None] * (self.rcut[:,:,None] - r[None,None,:])**2
-        v[r[None,None,:] > self.rcut[:,:,None]] = 0.
-        v /= self.rcut[:,:,None]**2
+        A = np.asarray(self.A)[..., None]
+        rcut = np.asarray(self.rcut)[..., None]
+        r = r[None, None, :]
+        v = 0.5 * A * (1 - r / rcut)**2
+        v[r > rcut] = 0.
 
         v = np.squeeze(v)
         if v.ndim == 0: v = v.item()
@@ -171,9 +173,11 @@ class DPD(Potential):
     def force(self, r: float | NDArray):
         r = np.atleast_1d(r)
 
-        f = self.A[:,:,None] * (self.rcut[:,:,None] - r[None,None,:])
-        f[r[None,None,:] > self.rcut[:,:,None]] = 0.
-        f /= self.rcut[:,:,None]**2
+        A = np.asarray(self.A)[..., None]
+        rcut = np.asarray(self.rcut)[..., None]
+        r = r[None, None, :]
+        f = A * (1 - r / rcut) / rcut
+        f[r > rcut] = 0.
 
         f = np.squeeze(f)
         if f.ndim == 0: f = f.item()
@@ -223,6 +227,21 @@ def test_dpd():
         assert v.potential(r).shape == (n, n, r.size)
         test_copy(v, v.copy())
         test_copy(v, pickle.loads(pickle.dumps(v)))
+
+    # Gradient test for mixtures.
+    r = np.linspace(0, 2, 11)
+    for n in [2, 3]:
+        dA = np.random.random((n, n))
+        dA = dA + dA.T
+        A = 25 * np.ones((n, n)) + dA
+        dR = 0.1 * np.random.random((n, n))
+        dR = dR + dR.T
+        R = np.ones((n,n)) + dR
+        v = DPD(A, R)
+        f = lambda x: v.potential(x).reshape(-1)
+        exact = np.array([-approx_fprime(rr, f) for rr in r]).T.reshape(n,n,len(r))
+        analytic = v.force(r)
+        assert np.allclose(exact, analytic)
 
 
 class GaussianIonLongRange(Potential):
