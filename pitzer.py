@@ -170,6 +170,10 @@ class PitzerModel:
     def name(self):
         return f'{cation.split('+')[0]}{anion.split('-')[0]}'
 
+    def max_molality(self, modified=False):
+        if modified: return self.modified_coeffs[-1]
+        else: return self.regular_coeffs[-1]
+
     def __call__(self, T, m, modified=False,
                  pressure=atmospheric_pressure):
 
