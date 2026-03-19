@@ -162,13 +162,13 @@ class PitzerModel:
         assert self.vM*self.zM + self.vX*self.zX == 0 # charge neutrality
 
         try: self.regular_coeffs = pitzer_coeffs[self.name]
-        except KeyError: self.modified_coeffs = None
+        except KeyError: self.pitzer_coeffs = None
         try: self.modified_coeffs = modified_pitzer_coeffs[self.name]
         except KeyError: self.modified_coeffs = None
 
     @property
     def name(self):
-        return f'{cation.split('+')[0]}{anion.split('-')[0]}'
+        return f'{self.cation.split('+')[0]}{self.anion.split('-')[0]}'
 
     def max_molality(self, modified=False):
         if modified: return self.modified_coeffs[-1]
@@ -251,7 +251,8 @@ if __name__ == '__main__':
     T = 298 # temperature
     m = np.insert(np.geomspace(1e-3, args.molality, 1001), 0, 0.0) # prepend 0.0 to logspace
 
-    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(2*3.375, 2*3.375))
+    fig, axes = plt.subplots(nrows=2, ncols=4,
+                             figsize=(2*3.375, 3.375), sharex=True)
 
     for cation, ax in zip(cations, axes.ravel()):
         for anion in anions:
