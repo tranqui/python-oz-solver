@@ -25,6 +25,7 @@ import pyfftw
 import argparse
 import numpy as np
 from scipy.integrate import simpson
+from scipy.optimize import root_scalar
 from collections import deque
 
 try:
@@ -50,6 +51,25 @@ from numpy.typing import NDArray
 
 class RadialGrid:
 
+    def __getstate__(self):
+        """Remove non-pickleable FFTW objects"""
+        state = self.__dict__.copy()
+        # Remove FFTW attributes
+        state.pop("fftwx", None)
+        state.pop("fftwy", None)
+        state.pop("fftw", None)
+        return state
+
+    def __setstate__(self, state):
+        """Restore the object, and rebuild FFTW"""
+        self.__dict__.update(state)
+        self._init_fftw()
+
+    def __reduce__(self):
+        """Tell pickle how to reconstruct the object"""
+        # callable, args, state
+        return (self.__class__, (self.L, self.N), self.__getstate__())
+
     def __init__(self, L: float, N=2**13):
         """Initialise grids with the desired size and spacing"""
 
@@ -64,6 +84,10 @@ class RadialGrid:
         self.r = self.dr * np.arange(1, self.N)
         self.q = self.dq * np.arange(1, self.N)
 
+        # FFTW arrays and plan
+        self._init_fftw()
+
+    def _init_fftw(self):
         self.fftwx = pyfftw.empty_aligned(self.N-1)
         self.fftwy = pyfftw.empty_aligned(self.N-1)
         self.fftw = pyfftw.FFTW(self.fftwx, self.fftwy,
@@ -92,6 +116,15 @@ class RadialGrid:
         assert np.allclose(fpad[..., 0], 0)
         assert np.allclose(fpad[..., -1], 0)
         return simpson(fpad, dx=self.dr)
+
+    def fourier_integrate(self, fq):
+
+        zeros = np.zeros(fq.shape[:-1] + (1,))
+        fpad = np.concatenate([zeros, fq, zeros], axis=-1)
+        assert np.allclose(fpad[..., 0], 0)
+        assert np.allclose(fpad[..., -1], 0)
+        return simpson(fpad, dx=self.dq)
+
 
     # These functions assume the FFTW has been initialised as above, the
     # arrays r and q exist, as do the parameters Δr and Δq.
@@ -558,6 +591,9 @@ class OrnsteinZernikeSolver(ABC):
         if np.any(np.isnan(input)): raise ValueError
         assert input.size == potential.nspecies**2 * self.grid.size
 
+        try: self.osmotic.converged = False
+        except: pass
+
         # Memory of iterations for inferring hessian
         f = deque(maxlen=self.history_size) # input value in each step
         g = deque(maxlen=self.history_size) # output value in each step
@@ -649,21 +685,80 @@ class OrnsteinZernikeSolver(ABC):
                 print(f'{self.name}: iteration {iter:3d}, error = {self.error:0.3e}')
                 print(f'{self.name}: failed to converge')
 
-        return self.copy() # the user can name this 'soln' or something
+        return self.copy()
 
     @property
     def pressure(self):
         """$\beta p$ via virial route."""
         assert self.converged
+
         f = self.potential.force(self.r)
         f[f > 1e4] = 0.
-        I = np.sum(np.outer(self.rho, self.rho) * self.grid.integrate(self.r**3*self.g*f))
-        return np.sum(self.rho) + 2/3 * np.pi / self.T * I
+        ρ = np.outer(self.rho, self.rho)
+        con = tuple(range(ρ.ndim)) # contraction axes
+
+        integrand = np.sum(ρ[...,None] * f * self.g, axis=con) * self.r**3
+        I = self.grid.integrate(integrand)
+
+        return np.sum(self.rho) + (2*np.pi/3) * I
+
+    @property
+    def kirkwood_buff_integral(self):
+        """The integrals
+        $$G_{ij} = \int d\vec{r} \, h_{ij}(r)\,.$$
+
+        These are essentially the zero wavevector component of the partial
+        static structure factors.
+        """
+        return 4*np.pi * self.grid.integrate(self.r**2*self.h)
 
     @property
     def excess_chemical_potential(self):
         raise NotImplementedError
 
+    def calculate_osmotic_pressure(self, solvent=0, eps=1e-2,
+                                   solver=None, nattempts=10, **kwargs):
+        """Find the solvent which coexists with the current solution."""
+
+        assert self.potential.nspecies > 1
+        assert self.converged
+
+        if solver is None:
+            osmotic = self.copy()
+            ρ0 = self.rho[solvent]
+        else:
+            osmotic = solver
+            ρ0 = osmotic.rho
+
+        v0 = self.potential.subset(solvent)
+        μ0 = self.excess_chemical_potential[solvent] + np.log(self.rho[solvent])
+
+        def residual(rho):
+            osmotic.solve(v0, rho, restart=residual.first, **kwargs)
+            residual.first = False
+            μ = osmotic.excess_chemical_potential + np.log(rho)
+            return μ - μ0
+        residual.first = solver is None
+
+        for attempt in range(nattempts):
+            try:
+                result = root_scalar(residual, bracket=(ρ0-eps, ρ0+eps))
+                break
+            except ValueError:
+                eps *= 2
+                continue
+        else:
+            raise RuntimeError(f'failed to converge after {nattempts} iterations')
+        osmotic.solve(v0, result.root, **kwargs)
+        self.osmotic = osmotic
+        return self.osmotic.copy()
+
+    @property
+    def osmotic_pressure(self):
+        """Determine the osmotic pressure """
+        try: return self.pressure - self.osmotic.pressure
+        except: self.calculate_osmotic_pressure()
+        return self.pressure - self.osmotic.pressure
 
 class PercusYevickSolver(OrnsteinZernikeSolver):
     def bridge_closure(self, e: NDArray, *args, **kwargs):
