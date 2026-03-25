@@ -97,6 +97,9 @@ class PlanarGrid:
         self.start = (self.full_size - self.N) // 2
         self.stop = self.start + self.N
 
+    @property
+    def size(self):
+        return self.N
 
     def fourier_forward(self, fx: NDArray):
         """Forward transform of f(x) to reciprocal space."""
