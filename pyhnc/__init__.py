@@ -26,6 +26,8 @@ __version__ = '1.0' # for reporting purposes
 try:
     from .pyhnc import *
     from . import planar
+    from . import thermostats
 except ImportError:
     from pyhnc import *
     import planar
+    import thermostats
