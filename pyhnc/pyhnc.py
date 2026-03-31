@@ -689,7 +689,7 @@ class OrnsteinZernikeSolver(ABC):
 
     @property
     def pressure(self):
-        """$\beta p$ via virial route."""
+        r"""$\beta p$ via virial route."""
         assert self.converged
 
         f = self.potential.force(self.r)
@@ -704,7 +704,7 @@ class OrnsteinZernikeSolver(ABC):
 
     @property
     def kirkwood_buff_integral(self):
-        """The integrals
+        r"""The integrals
         $$G_{ij} = \int d\vec{r} \, h_{ij}(r)\,.$$
 
         These are essentially the zero wavevector component of the partial
@@ -993,11 +993,13 @@ class SoluteSolver(Solver):
     """Subclass for infinitely dilute solute inside solvent."""
 
     def __init__(self, solvent, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.solvent = solvent.copy()
+        self.grid = self.solvent.grid
+        super().__init__(self.grid, *args, **kwargs)
 
     def init_kwargs(self):
         kwargs = super().init_kwargs()
+        del kwargs['grid']
         kwargs['solvent'] = self.solvent
         return kwargs
 
