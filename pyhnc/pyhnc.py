@@ -786,7 +786,6 @@ class HypernettedChainSolver(OrnsteinZernikeSolver):
 
     @property
     def excess_chemical_potential(self):
-        r"""Test particle route for $\beta \mu^\mathrm{ex}$."""
         assert self.converged
         I = self.grid.integrate(self.r**2*(self.h*self.e/2 - self.c))
         try: return 4*np.pi / self.T * I @ np.atleast_1d(self.rho)
@@ -796,6 +795,22 @@ class HypernettedChainSolver(OrnsteinZernikeSolver):
     def excess_free_energy_density(self):
         r"""Free energy route for $\beta f^\mathrm{ex} = \beta F^\mathrm{ex} / V$."""
         return self.rho * (1 + self.excess_chemical_potential) - self.pressure
+
+class RandomPhaseApproximationSolver(OrnsteinZernikeSolver):
+    """Subclass for mean-field DFT approach."""
+
+    def bridge_closure(self, e: NDArray, *args, **kwargs):
+        """Closure to the OZ equation for $b(r)$."""
+        return np.asarray(0.)
+
+    def oz_solution_hq_from_cq(self, cq: NDArray, rho: float, *args, **kwargs):
+        """Solution to the OZ equation in reciprocal space."""
+        return cq / (1 + rho*self.vq) # force RPA closure in reciprocal term
+
+    def solve(self, potential, rho: float, T: float=1., *args, **kwargs):
+        vr = potential(self.r) / T
+        self.vq = self.grid.fourier_bessel_forward(vr)
+        return super().solve(potential, rho, T, *args, **kwargs)
 
 
 # Default to HNC closure
@@ -1008,50 +1023,41 @@ class SoluteSolver(Solver):
         return self.solvent.Sq * cq
 
     def solve(self, potential, *args, **kwargs):
-        # rho = 0.0 as it is not needed
-        rho = np.zeros(potential.nspecies) if potential.nspecies > 1 else 0.
+        rho = self.solvent.rho
         return super().solve(potential, rho, *args, **kwargs)
 
-# Below, cases added by Josh
+class SoluteHomodimerSolver(SoluteSolver):
+    r"""Subclass for solving homodimers, solving the equation:
+    
+    $$h_{10} = (c_{10} + \omega_{12} c_{20}) (1 + \rho_0 h_{00}),,$$
 
-class TestParticleRPA(Solver):
-    """Subclass for mean-field DFT approach."""
+    assuming $c_{10} = c_{20}$ for homodimers.
+    """
 
-    # Tell pytest to ignore the "Test" prefix in this name.
-    __test__ = False
+    def __init__(self, solvent, omega12, *args, **kwargs):
+        super().__init__(solvent, *args, **kwargs)
+        self.omega12 = omega12
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def init_kwargs(self):
+        kwargs = super().init_kwargs()
+        kwargs['omega12'] = self.omega12
+        return kwargs
 
     def oz_solution_hq_from_cq(self, cq: NDArray, rho: float, *args, **kwargs):
-        """Solution to the OZ equation in reciprocal space."""
-        return cq / (1 + rho*self.vq) # force RPA closure in reciprocal term
-
-    def solve(self, potential,
-              rho: float, T: float=1.,
-              *args, **kwargs):
-        vr = potential(self.r) / T
-        self.vq = self.grid.fourier_bessel_forward(vr) # forward transform v(r) to v(q)
-        return super().solve(potential, rho, T, *args, **kwargs)
+        """Solve the modified OZ equation for h, in reciprocal space."""
+        return self.solvent.Sq * (1 + self.omega12) * cq
 
 class SoluteTestParticleRPA(SoluteSolver):
 
-    def __init__(self, *args, npicard=np.inf, **kwargs):
-        try: super().__init__(*args, npicard=npicard, **kwargs)
-        except TypeError:
-            # If npicard given as positional argument drop it.
-            super().__init__(*args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        vr = self.solvent.potential(self.r) / self.solvent.T
+        vq = self.grid.fourier_bessel_forward(vr)
+        self.Sq00 = 1 / (1 + self.solvent.rho * vq)
 
     def oz_solution_hq_from_cq(self, cq: NDArray, rho: float, *args, **kwargs):
         """Solution to the OZ equation in reciprocal space."""
-        return cq - self.solvent.rho * self.solvent.hq * self.vq01 # RPA closure
-
-    def solve(self, potential, T: float=1.,
-              *args, **kwargs):
-        vr01 = potential(self.r) / T
-        self.vq01 = self.grid.fourier_bessel_forward(vr01) # forward transform v(r) to v(q)
-        return super().solve(potential, T, *args, **kwargs)
-
+        return self.Sq00 * cq
 
 if __name__ == '__main__':
     test_radial_grid(1)
