@@ -280,6 +280,10 @@ class OrnsteinZernikeSolver(ABC):
         return 1 + self.h
 
     @property
+    def y(self):
+        return self.g * np.exp(self.potential(self.r))
+
+    @property
     def eq(self):
         return self.grid.fourier_bessel_forward(self.e)
 

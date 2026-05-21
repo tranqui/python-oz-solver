@@ -1,5 +1,6 @@
 __pycache__
 *.pdf
+*.png
 *~*#
 *.log
 *DS_store*
