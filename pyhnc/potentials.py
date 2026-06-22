@@ -366,8 +366,8 @@ class GaussianIon(Potential):
         if f.ndim == 0: f = f.item()
         return f
 
-class ExponentialIonLongRange(Potential):
-    r"""Long range part of ExponentialIon."""
+class ExponentialIonLongRangeOld(Potential):
+    r"""Long range part of ExponentialIonOld."""
 
     def __repr__(self):
         return rf'<{type(self).__name__} z={self.full.z} λ={self.full.λ} lB={self.full.lB}>'
@@ -431,7 +431,7 @@ class ExponentialIonLongRange(Potential):
         return f
 
 
-class ExponentialIon(Potential):
+class ExponentialIonOld(Potential):
     r"""Interactions between ions with exponentially distributed charges
     (often referred to as "Slater" type in the literature):
 
@@ -454,7 +454,7 @@ class ExponentialIon(Potential):
         assert self.λ.size == 1
         self.lB = lB
 
-        self.long = ExponentialIonLongRange(self)
+        self.long = ExponentialIonLongRangeOld(self)
         self.short = ShortRangeResidual(self)
 
     def __eq__(self, other):
@@ -470,7 +470,7 @@ class ExponentialIon(Potential):
     def subset(self, species: list | NDArray):
         species = np.atleast_1d(species)
         assert np.all(species >= 0) and np.all(species <= self.nspecies)
-        return ExponentialIon(self.z[species], self.λ, self.lB)
+        return ExponentialIonOld(self.z[species], self.λ, self.lB)
 
     @property
     def α(self):
@@ -507,6 +507,267 @@ class ExponentialIon(Potential):
         f = np.squeeze(f)
         if f.ndim == 0: f = f.item()
         return f
+
+class ExponentialIonLongRange(Potential):
+    r"""Long range part of ExponentialIon."""
+
+    def __repr__(self):
+        return rf'<{type(self).__name__} z={self.full.z} λ={self.full.λ} lB={self.full.lB}>'
+
+    def __init__(self, full):
+        self.full = full
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return self.full == other.full
+
+    @property
+    def nspecies(self):
+        return self.full.nspecies
+
+    @property
+    def α(self):
+        """Option for consistency with GaussianIon interface."""
+        return self.λ
+
+    @α.setter
+    def α(self, value):
+        """Option for consistency with GaussianIon interface."""
+        self.λ = value
+
+    def potential(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = np.atleast_1d(self.full.λ)
+
+        with np.errstate(invalid='ignore'):
+            v = np.exp(-2*r/λ[:,None]) * (1 + r/λ[:,None])
+            v = 0.5 * (v[None,:,:] + v[:,None,:])
+            v = self.full.lB * (1 - v) / r
+        v = np.outer(self.full.z, self.full.z)[:,:,None] * v[None,None,:]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def potential_fourier(self, k: float | NDArray):
+        k = np.atleast_1d(k)
+        λ = np.atleast_1d(self.full.λ)
+
+        with np.errstate(invalid='ignore'):
+            Gk = 16 / (4 + λ[:,None]**2 * k**2)**2
+            Gk = 0.5 * (Gk[None,:,:] + Gk[:,None,:])
+            v = 4 * np.pi * self.full.lB * Gk / k**2
+        v = np.outer(self.full.z, self.full.z)[:,:,None] * v[None,None,:]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def force(self, r: float | NDArray):
+        r = np.atleast_1d(r)
+        λ = self.full.λ
+
+        with np.errstate(invalid='ignore'):
+            f = self.full.lB * (
+                    1 - np.exp(-2*r/λ) * (1 + 2*r/λ + 2*(r/λ)**2)
+                ) / r**2
+        f = np.outer(self.full.z, self.full.z)[:,:,None] * f[None,None,:]
+
+        f = np.squeeze(f)
+        if f.ndim == 0: f = f.item()
+        return f
+
+
+class ExponentialIon(Potential):
+    r"""Interactions between ions with exponentially distributed charges
+    (often referred to as "Slater" type in the literature):
+
+        $$\rho_i(r) = \ell_\mathrm{B} z_i
+        \frac{e^{-\frac{2 r}{\lambda}}}{\pi \lambda^3}\,,$$
+
+    where $r$ is the distance from the atom centre, $\ell_\mathrm{B}$ is the
+    Bjerrum length and $z_i$ is the valence of species $i$.
+    """
+
+    def __getinitargs__(self):
+        return self.z.copy(), self.λ.copy(), self.lB
+
+    def __repr__(self):
+        return rf'<{type(self).__name__} z={self.z} λ={self.λ} lB={self.lB}>'
+
+    def __init__(self, z: float | NDArray, λ: float, lB: float=1.):
+        self.z = np.atleast_1d(z)
+        self.λ = np.array(λ)
+        assert self.λ.size == 1 or self.λ.size == self.z.size
+        self.lB = lB
+
+        self.long = ExponentialIonLongRange(self)
+        self.short = ShortRangeResidual(self)
+
+    def __eq__(self, other):
+        if type(other) is not type(self): return False
+        return np.all(self.z == other.z) and \
+               np.all(self.λ == other.λ) and \
+               self.lB == other.lB
+
+    @property
+    def nspecies(self):
+        return len(self.z)
+
+    def subset(self, species: list | NDArray):
+        species = np.atleast_1d(species)
+        assert np.all(species >= 0) and np.all(species <= self.nspecies)
+        return ExponentialIon(self.z[species], self.λ, self.lB)
+
+    @property
+    def α(self):
+        """Option for consistency with GaussianIon interface."""
+        return self.λ
+
+    @α.setter
+    def α(self, value):
+        """Option for consistency with GaussianIon interface."""
+        self.λ = value
+
+    def potential(self, r: float | NDArray, rtol: float=1e-8):
+        r = np.atleast_1d(r)
+        λ = self.λ
+        if λ.ndim == 0:
+            λ = np.full_like(self.z, λ, dtype=float)
+
+        x = λ**2
+        xi, xj = x[:, None, None], x[None, :, None]
+        dx = xj - xi
+        rr = r[None, None, :]
+
+        def g(x):
+            return x**3 * np.exp(-2*rr/x**0.5)
+        def gp(x):
+            return (3*x**2 + r*x**1.5) * np.exp(-2*rr/x**0.5)
+        def gp2(x):
+            return (6*x + 4.5*r*x**0.5 + r**2) * np.exp(-2*rr/x**0.5)
+        def gp3(x):
+            return (6 + 8.25*r/x**0.5 + 4.5*r**2/x + r**3/x**1.5) * np.exp(-2*rr/x**0.5)
+        def gp4(x):
+            return (1.875*r/x**1.5 + 3.75*r**2/x**2 + 3*r**3/x**2.5 + r**4/x**3) * np.exp(-2*rr/x**0.5)
+
+        gi, gj = g(xi), g(xj)
+        gpi, gpj = gp(xi), gp(xj)
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            ψ = 2*(gi - gj) / dx**3 + (gpi + gpj) / dx**2
+
+        # Switch to Taylor expansion to remove numerical instabilities
+        # approaching removable singularity as dx->0.
+        close = np.abs(dx) < rtol * np.maximum(1, np.abs(xi))
+        if np.any(close):
+            ψ_lim = gp3(xi)/6 + gp4(xi)/12 * dx
+            close = np.broadcast_to(close, ψ.shape)
+            ψ[close] = ψ_lim[close]
+            
+        v = self.lB * (1 - ψ) / rr
+        v *= np.outer(self.z, self.z)[:,:,None]
+
+        v = np.squeeze(v)
+        if v.ndim == 0: v = v.item()
+        return v
+
+    def force(self, r: float | NDArray, rtol: float=1e-8):
+        r = np.atleast_1d(r)
+        λ = self.λ
+        if λ.ndim == 0:
+            λ = np.full_like(self.z, λ, dtype=float)
+
+        x = λ**2
+        xi, xj = x[:, None, None], x[None, :, None]
+        dx = xj - xi
+        rr = r[None, None, :]
+
+        def g(x):
+            return x**3 * np.exp(-2*rr/x**0.5)
+        def gp(x):
+            return (3*x**2 + r*x**1.5) * np.exp(-2*rr/x**0.5)
+        def gp2(x):
+            return (6*x + 4.5*r*x**0.5 + r**2) * np.exp(-2*rr/x**0.5)
+        def gp3(x):
+            return (6 + 8.25*r/x**0.5 + 4.5*r**2/x + r**3/x**1.5) * np.exp(-2*rr/x**0.5)
+        def gp4(x):
+            return (1.875*r/x**1.5 + 3.75*r**2/x**2 + 3*r**3/x**2.5 + r**4/x**3) * np.exp(-2*rr/x**0.5)
+
+        # h is derivative of g wrt r.
+        def h(x):
+            return -2*x**2.5 * np.exp(-2*rr/x**0.5)
+        def hp(x):
+            return (-5*x**1.5 - 2*r*x) * np.exp(-2*rr/x**0.5)
+        def hp2(x):
+            return (-7.5*x**0.5 - 7*r - 2*r**2/x**0.5) * np.exp(-2*rr/x**0.5)
+        def hp3(x):
+            return (-3.75/x**0.5 - 7.5*r/x - 6*r**2/x**1.5 - 2*r**3/x**2) * np.exp(-2*rr/x**0.5)
+        def hp4(x):
+            return (1.875/x**1.5 + 3.75*r/x**2 + 1.5*r**2/x**2.5 - 2*r**3/x**3 - 2*r**4/x**3.5) * np.exp(-2*rr/x**0.5)
+
+        gi, gj = g(xi), g(xj)
+        gpi, gpj = gp(xi), gp(xj)
+        hi, hj = h(xi), h(xj)
+        hpi, hpj = hp(xi), hp(xj)
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            ψ = 2*(gi - gj) / dx**3 + (gpi + gpj) / dx**2
+            ψp = 2*(hi - hj) / dx**3 + (hpi + hpj) / dx**2
+
+        # Switch to Taylor expansion to remove numerical instabilities
+        # approaching removable singularity as dx->0.
+        close = np.abs(dx) < rtol * np.maximum(1, np.abs(xi))
+        if np.any(close):
+            ψ_lim = gp3(xi)/6 + gp4(xi)/12 * dx
+            ψp_lim = hp3(xi)/6 + hp4(xi)/12 * dx
+            close = np.broadcast_to(close, ψ.shape)
+            ψ[close] = ψ_lim[close]
+            ψp[close] = ψp_lim[close]
+            
+        f = self.lB * (1 - ψ) / rr**2 + self.lB * ψp / rr
+        f *= np.outer(self.z, self.z)[:,:,None]
+
+        f = np.squeeze(f)
+        if f.ndim == 0: f = f.item()
+        return f
+
+import pytest
+@pytest.mark.parametrize('l', [1, 2])
+def test_consistency(l):
+    v1 = ExponentialIonOld([1, -1], l)
+    v2 = ExponentialIon([1, -1], l)
+    v3 = ExponentialIon([1, -1], [l, l])
+    v4 = ExponentialIon([1, -1], [l, 0.5*l])
+    r = np.linspace(0, 1, 4)[1:]
+    a = v1.long.potential_fourier(r)
+    b = v2.long.potential_fourier(r)
+    c = v3.long.potential_fourier(r)
+    d = v4.long.potential_fourier(r)
+    assert np.allclose(a, b)
+    assert np.allclose(b, c)
+    assert not np.allclose(c, d)
+    a = v1.long.potential(r)
+    b = v2.long.potential(r)
+    c = v3.long.potential(r)
+    d = v4.long.potential(r)
+    assert np.allclose(a, b)
+    assert np.allclose(b, c)
+    assert not np.allclose(c, d)
+    a = v1.potential(r)
+    b = v2.potential(r)
+    c = v3.potential(r)
+    d = v4.potential(r)
+    assert np.allclose(a, b)
+    assert np.allclose(b, c)
+    assert not np.allclose(c, d)
+    a = v1.force(r)
+    b = v2.force(r)
+    c = v3.force(r)
+    d = v4.force(r)
+    assert np.allclose(a, b)
+    assert np.allclose(b, c)
+    assert not np.allclose(c, d)
 
 import pytest
 @pytest.mark.parametrize('cls', [GaussianIon, ExponentialIon])
@@ -850,6 +1111,8 @@ class DPDExponentialIon(Potential):
 
 if __name__ == '__main__':
     test_dpd()
+    test_consistency(1)
+    test_consistency(2)
     for ion in GaussianIon, ExponentialIon: test_ion(ion)
     test_lj()
     test_gaussian()
